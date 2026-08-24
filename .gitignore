@@ -1,0 +1,10 @@
+.pio/
+*.elf
+src/secrets.h
+preview/_frames/
+**/__pycache__/
+*.pyc
+rust/matrix-sim/target/
+.venv/
+.DS_Store
+hub/static/
