@@ -10,6 +10,12 @@ The 32×9 is a **camera** into a larger world. Two sims stay resident in RAM; sw
 
 Not a HUB75 wall. Not e-ink. No IMU / LDR on the v2.2 PCB — ADC is the LiPo divider.
 
+## Hardware
+
+- **Buy:** [Crowd Supply — Maker LED Display](https://www.crowdsupply.com/soldered/maker-led-display) (pick **Display2 / 32×9**)
+- **Official hardware repo:** [SolderedElectronics/Maker-Display](https://github.com/SolderedElectronics/Maker-Display)
+- **Print our case:** [`printables/`](printables/) — two-piece PETG that clears a soldered 1×6 header (`case/*.stl`). Official 2019 Small kit is also mirrored there.
+
 ## Drive it
 
 ```text
@@ -31,8 +37,6 @@ Hub (this repo):
 export MATRIX_URL=http://rage-matrix.local   # or the board IP
 python3 hub/server.py                        # http://127.0.0.1:8765
 ```
-
-House install can keep using the private wiki hub at `/matrix` — same API.
 
 ## Flash
 
