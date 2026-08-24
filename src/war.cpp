@@ -14,11 +14,11 @@
 #define TEAM_E 1
 
 struct Unit {
-  float x, y, a, hp;
+  float x, y, ox, oy, a, hp;
   uint8_t g[8];
   uint8_t team, gen, cd, alive, role; // role 0=inf 1=arty
   uint8_t kills;
-  uint16_t dmg;
+  uint16_t dmg, born;
 };
 
 struct Shot {
@@ -46,7 +46,23 @@ static uint8_t age = 0;  // 0 camp · 1 melee · 2 guns · 3 arty
 static uint16_t sciW = 0, sciE = 0;
 static uint8_t seq = 0; // 0 live · 1 score · 2 next · 3 hold
 static bool harvested = false;
+static uint16_t turnN = 0;
+static uint32_t playUntil = 0;
+static bool autoTurns = true;
 static const char *AGE_NAME[] = {"CAMP", "MELEE", "GUNS", "ARTY"};
+static const float CITY_X[4] = {5.0f, 5.0f, 43.0f, 43.0f};
+static const float CITY_Y[4] = {5.0f, 13.0f, 5.0f, 13.0f};
+
+static uint16_t playMs() {
+  if (pace == 0) return 1400;
+  if (pace == 2) return 2800;
+  return 2200;
+}
+static uint16_t turnCap() {
+  if (pace == 0) return 16;
+  if (pace == 2) return 36;
+  return 24;
+}
 
 static uint16_t matchCap() {
   if (pace == 0) return 1600;
@@ -59,9 +75,9 @@ static uint16_t stallCap() {
   return 980;
 }
 static uint16_t ageNeed(uint8_t a) {
-  uint16_t base = (a == 0) ? 70 : (a == 1 ? 200 : 380);
-  if (pace == 0) return (uint16_t)(base * 0.55f);
-  if (pace == 2) return (uint16_t)(base * 1.45f);
+  uint16_t base = (a == 0) ? 28 : (a == 1 ? 72 : 140);
+  if (pace == 0) return (uint16_t)(base * 0.7f);
+  if (pace == 2) return (uint16_t)(base * 1.35f);
   return base;
 }
 
@@ -142,19 +158,22 @@ static int spawnUnit(float x, float y, uint8_t team, uint8_t role, const uint8_t
     us[i].role = role;
     us[i].x = clampf(x, 1, WW - 2);
     us[i].y = clampf(y, 1, WH - 2);
+    us[i].ox = us[i].x;
+    us[i].oy = us[i].y;
     us[i].a = (team == TEAM_W) ? 0.0f : 3.1416f;
     us[i].hp = role ? 1.35f : 1.0f;
     us[i].gen = gen;
     us[i].cd = (uint8_t)random(0, 12);
     us[i].kills = 0;
     us[i].dmg = 0;
+    us[i].born = turnN;
     if (src) {
       memcpy(us[i].g, src, 8);
       mutate(us[i].g);
     } else {
       for (int k = 0; k < 8; k++) us[i].g[k] = (uint8_t)random(40, 220);
     }
-    if (us[i].g[6] > 200) us[i].role = 1;
+    if (!civOn && us[i].g[6] > 200) us[i].role = 1;
     return i;
   }
   return -1;
@@ -223,19 +242,24 @@ static void deploy(bool evolve) {
   memset(boom, 0, sizeof(boom));
   matchTick = 0;
   lastKillTick = 0;
+  turnN = 0;
+  playUntil = 0;
   matchN++;
   for (uint8_t t = 0; t < 2; t++) {
-    for (int i = 0; i < 6; i++) {
-      bool arty = (!civOn || age >= 3) && (i == 0);
-      float x = t == TEAM_W ? (2.5f + frand() * 6.0f) : (WW - 3.5f - frand() * 6.0f);
-      float y = 2.0f + frand() * (WH - 4.0f);
-      const uint8_t *src = nullptr;
-      uint8_t gen = 0;
-      if (evolve && eliteN[t] > 0) {
-        src = elite[t][random(0, eliteN[t])];
-        gen = maxGen; // bumped after harvest
+    for (int c = 0; c < 2; c++) {
+      int ci = t * 2 + c;
+      for (int k = 0; k < 2; k++) {
+        bool arty = (!civOn || age >= 3) && (k == 0 && c == 0);
+        float x = CITY_X[ci] + (frand() - 0.5f) * 3.2f;
+        float y = CITY_Y[ci] + (frand() - 0.5f) * 2.4f;
+        const uint8_t *src = nullptr;
+        uint8_t gen = 0;
+        if (evolve && eliteN[t] > 0) {
+          src = elite[t][random(0, eliteN[t])];
+          gen = maxGen;
+        }
+        spawnUnit(x, y, t, arty ? 1 : 0, src, gen);
       }
-      spawnUnit(x, y, t, arty ? 1 : 0, src, gen);
     }
   }
   camX = 8.0f;
@@ -305,13 +329,13 @@ static void pumpCards() {
 
 static void tryAgeUp() {
   if (!civOn || age >= 3) return;
-  uint16_t need = ageNeed(age);
-  if ((uint16_t)(sciW + sciE) < need) return;
-  age++;
-  cardShow(AGE_NAME[age], 1800);
+  if (turnN >= 220) age = 3;
+  else if (turnN >= 130) age = 2;
+  else if (turnN >= 50) age = 1;
 }
 
 void warRematch() {
+  if (civOn) return;
   if (seq == 0) requestEnd();
   else finishToNext();
 }
@@ -329,9 +353,12 @@ void warSeed() {
   age = civOn ? 0 : 2;
   seq = 0;
   harvested = false;
+  turnN = 0;
+  playUntil = 0;
+  autoTurns = true;
   buildMap();
   deploy(false);
-  if (civOn) cardShow("CAMP", 1800);
+  cardClear();
 }
 
 void warBegin() { warSeed(); }
@@ -384,7 +411,159 @@ static void tryMove(Unit &u, float nx, float ny) {
   u.a += 1.15f;
 }
 
+static void applyKill(int victim, uint8_t team) {
+  us[victim].alive = 0;
+  if (team == TEAM_W) killW++;
+  else killE++;
+  lastKillTick = matchTick;
+  for (int k = 0; k < MAX_U; k++)
+    if (us[k].alive && us[k].team == team) {
+      us[k].kills++;
+      break;
+    }
+}
+
+static void resolveTurn() {
+  if (seq && !civOn) return;
+  seq = 0;
+  for (int i = 0; i < MAX_U; i++) {
+    us[i].ox = us[i].x;
+    us[i].oy = us[i].y;
+  }
+  clearShots();
+  turnN++;
+  tick = turnN;
+  matchTick = turnN;
+  sciW = (uint16_t)(sciW + 4 + nW);
+  sciE = (uint16_t)(sciE + 4 + nE);
+  tryAgeUp();
+
+  // Cities slowly replace the dead. World does not reset.
+  if ((turnN % 6) == 0) {
+    for (uint8_t t = 0; t < 2; t++) {
+      uint8_t n = (t == TEAM_W) ? nW : nE;
+      if (n >= 6) continue;
+      int ci = t * 2 + (turnN & 1);
+      spawnUnit(CITY_X[ci] + (frand() - 0.5f) * 1.6f, CITY_Y[ci] + (frand() - 0.5f) * 1.2f, t,
+                (age >= 3 && n == 0) ? 1 : 0, eliteN[t] ? elite[t][0] : nullptr, maxGen);
+    }
+    tally();
+  }
+
+  for (int i = 0; i < MAX_U; i++) {
+    Unit &u = us[i];
+    if (!u.alive) continue;
+    uint16_t life = (turnN > u.born) ? (uint16_t)(turnN - u.born) : 0;
+    bool scout = u.g[7] > 140;
+    bool pack = u.g[1] > 110;
+    float edx = 0, edy = 0, ed2 = 1e9f;
+    int ei = nearestEnemy(u, &edx, &edy, &ed2);
+    int home = (u.team == TEAM_W ? 0 : 2) + (u.y > WH * 0.5f);
+    float tx = CITY_X[home], ty = CITY_Y[home];
+    float step = 0.28f + (life > 20 ? 0.18f : 0) + (life > 60 ? 0.12f : 0);
+
+    // Friend pull — they bunch and move as a group.
+    float fx = 0, fy = 0;
+    int fn = 0;
+    for (int j = 0; j < MAX_U; j++) {
+      if (j == i || !us[j].alive || us[j].team != u.team) continue;
+      float ddx = us[j].x - u.x, ddy = us[j].y - u.y;
+      float d2 = ddx * ddx + ddy * ddy;
+      if (d2 < 36.0f && d2 > 0.4f) {
+        fx += ddx;
+        fy += ddy;
+        fn++;
+      }
+    }
+    if (age == 0) {
+      tx += (frand() - 0.5f) * 3.0f + (u.team == TEAM_W ? 1.4f : -1.4f);
+      ty += (frand() - 0.5f) * 2.4f;
+      step *= 0.55f;
+    } else if (!scout && age < 2) {
+      tx += (u.team == TEAM_W ? 4.0f : -4.0f);
+      ty += (frand() - 0.5f) * 3.0f;
+    } else if (ei >= 0 && (age >= 2 || scout)) {
+      tx = us[ei].x;
+      ty = us[ei].y;
+      step += 0.15f;
+    }
+    if (pack && fn) {
+      tx = u.x + fx / fn * 0.55f + (tx - u.x) * 0.55f;
+      ty = u.y + fy / fn * 0.55f + (ty - u.y) * 0.55f;
+    }
+    float dx = tx - u.x, dy = ty - u.y;
+    float d = sqrtf(dx * dx + dy * dy);
+    if (d > 0.15f) tryMove(u, u.x + dx / d * step, u.y + dy / d * step);
+
+    if (ei < 0 || life < 8) continue; // grow up before they fight
+    bool see = los(u.x, u.y, us[ei].x, us[ei].y, u.role != 0);
+    if (age == 1 && ed2 < 2.8f) {
+      us[ei].hp -= 0.22f;
+      if (us[ei].hp <= 0) applyKill(ei, u.team);
+    } else if (age == 2 && !u.role && see && ed2 < 64.0f && (turnN % 2) == (i & 1)) {
+      fireFrom(u, us[ei].x, us[ei].y);
+      us[ei].hp -= 0.28f;
+      if (us[ei].hp <= 0) applyKill(ei, u.team);
+    } else if (age >= 3 && see && ed2 < (u.role ? 180.0f : 64.0f) && (turnN % 2) == (i & 1)) {
+      fireFrom(u, us[ei].x, us[ei].y);
+      us[ei].hp -= u.role ? 0.45f : 0.28f;
+      if (us[ei].hp <= 0) applyKill(ei, u.team);
+    }
+  }
+  tally();
+  playUntil = millis() + playMs();
+}
+
+void warStepTurn() {
+  autoTurns = false;
+  if (!cardLive() && seq == 0) resolveTurn();
+}
+
+static void civTick() {
+  seq = 0;
+  if (cardLive()) cardClear();
+  for (int y = 0; y < VH; y++)
+    for (int x = 0; x < VW; x++)
+      if (boom[y][x] > 8) boom[y][x] -= 8;
+      else boom[y][x] = 0;
+  for (int i = 0; i < MAX_S; i++) {
+    Shot &s = ss[i];
+    if (!s.on) continue;
+    s.x += s.dx;
+    s.y += s.dy;
+    if (s.life) s.life--;
+    int gx = (int)floorf(s.x), gy = (int)floorf(s.y);
+    if (s.life == 0 || s.x < 0 || s.y < 0 || s.x >= WW || s.y >= WH ||
+        (blockedCell(gx, gy) && !(s.arty && wall[clampi(gy, 0, WH - 1)][clampi(gx, 0, WW - 1)] == 1))) {
+      int vx = (int)lroundf(s.x - camX), vy = (int)lroundf(s.y - camY);
+      if ((unsigned)vx < VW && (unsigned)vy < VH) boom[vy][vx] = 80;
+      s.on = 0;
+    }
+  }
+  float mx = 24.0f, my = 9.0f, best = 1e9f;
+  for (int i = 0; i < MAX_U; i++) {
+    if (!us[i].alive || us[i].team != TEAM_W) continue;
+    for (int j = 0; j < MAX_U; j++) {
+      if (!us[j].alive || us[j].team != TEAM_E) continue;
+      float dx = us[j].x - us[i].x, dy = us[j].y - us[i].y;
+      float d2 = dx * dx + dy * dy;
+      if (d2 < best) {
+        best = d2;
+        mx = (us[i].x + us[j].x) * 0.5f;
+        my = (us[i].y + us[j].y) * 0.5f;
+      }
+    }
+  }
+  camX += (clampf(mx - VW * 0.5f, 0, WW - VW) - camX) * 0.12f;
+  camY += (clampf(my - VH * 0.5f, 0, WH - VH) - camY) * 0.12f;
+  if ((int32_t)(millis() - playUntil) >= 0 && autoTurns) resolveTurn();
+}
+
 void warStep() {
+  if (civOn) {
+    civTick();
+    return;
+  }
   pumpCards();
   if (seq) return;
 
@@ -540,6 +719,12 @@ static void plot(uint8_t fb[][32], int x, int y, uint8_t c) {
 void warRender(uint8_t fb[][32], uint8_t bright) {
   memset(fb, 0, VW * VH);
   uint8_t b = bright;
+  float u = 1.0f;
+  if (civOn && playUntil && (int32_t)(playUntil - millis()) > 0) {
+    u = 1.0f - (float)(playUntil - millis()) / (float)playMs();
+    if (u < 0) u = 0;
+    if (u > 1) u = 1;
+  }
   for (int y = 0; y < VH; y++) {
     for (int x = 0; x < VW; x++) {
       int gx = (int)floorf(camX) + x;
@@ -547,6 +732,17 @@ void warRender(uint8_t fb[][32], uint8_t bright) {
       if (gx < 0 || gy < 0 || gx >= WW || gy >= WH) continue;
       if (wall[gy][gx] == 1) plot(fb, x, y, (uint8_t)(b * 0.28f));
       else if (wall[gy][gx] == 2) plot(fb, x, y, (uint8_t)(b * 0.48f));
+    }
+  }
+  if (civOn) {
+    for (int c = 0; c < 4; c++) {
+      int x = (int)lroundf(CITY_X[c] - camX);
+      int y = (int)lroundf(CITY_Y[c] - camY);
+      uint8_t c0 = (uint8_t)(b * 0.72f);
+      plot(fb, x, y, c0);
+      plot(fb, x + 1, y, c0 / 2);
+      plot(fb, x, y + 1, c0 / 2);
+      plot(fb, x - 1, y, c0 / 3);
     }
   }
   for (int i = 0; i < MAX_S; i++) {
@@ -558,21 +754,27 @@ void warRender(uint8_t fb[][32], uint8_t bright) {
   }
   for (int i = 0; i < MAX_U; i++) {
     if (!us[i].alive) continue;
-    int x = (int)lroundf(us[i].x - camX);
-    int y = (int)lroundf(us[i].y - camY);
-    uint8_t core = (uint8_t)clampf(b * (0.40f + 0.55f * clampf(us[i].hp, 0, 1.2f)), 12, b);
+    float fx = us[i].ox + (us[i].x - us[i].ox) * u;
+    float fy = us[i].oy + (us[i].y - us[i].oy) * u;
+    int x = (int)lroundf(fx - camX);
+    int y = (int)lroundf(fy - camY);
+    uint16_t life = (turnN > us[i].born) ? (uint16_t)(turnN - us[i].born) : 0;
+    float grow = life < 8 ? 0.28f : (life < 30 ? 0.55f : (life < 80 ? 0.85f : 1.0f));
+    uint8_t core = (uint8_t)clampf(b * grow * (0.45f + 0.50f * clampf(us[i].hp, 0, 1.2f)), 8, b);
     if (us[i].role) {
       plot(fb, x, y, core);
       plot(fb, x + 1, y, core / 2);
       plot(fb, x - 1, y, core / 2);
       plot(fb, x, y + 1, core / 2);
       plot(fb, x, y - 1, core / 2);
+    } else if (life < 8) {
+      plot(fb, x, y, core); // pup — one pixel
     } else if (us[i].team == TEAM_W) {
       plot(fb, x, y, core);
-      plot(fb, x + 1, y, core / 3); // facing east
+      plot(fb, x + 1, y, core / 3);
     } else {
       plot(fb, x, y, core);
-      plot(fb, x - 1, y, core / 3); // facing west
+      plot(fb, x - 1, y, core / 3);
     }
   }
   for (int y = 0; y < VH; y++)
@@ -602,10 +804,13 @@ void warNudgeCam(int dx, int dy) {
 void warSetRules(bool civ, bool autoN, uint8_t p) {
   civOn = civ;
   autoNext = autoN;
+  autoTurns = autoN;
   pace = p > 2 ? 2 : p;
 }
 
-void warAdvanceAge() { tryAgeUp(); if (civOn && age < 3) { sciW = sciE = 400; tryAgeUp(); } }
+void warAdvanceAge() {
+  if (age < 3) age++;
+}
 
 bool warHolding() { return seq != 0; }
 
@@ -618,13 +823,13 @@ static void sendState() {
            "{\"ok\":true,\"sim\":\"war\",\"w\":32,\"h\":9,\"west\":%u,\"east\":%u,"
            "\"match\":%u,\"gen\":%u,\"kw\":%u,\"ke\":%u,\"tick\":%u,"
            "\"civ\":%s,\"auto\":%s,\"pace\":%u,\"age\":%u,\"age_name\":\"%s\","
-           "\"sciw\":%u,\"scie\":%u,\"hold\":%u,\"card\":\"%s\","
+           "\"sciw\":%u,\"scie\":%u,\"turn\":%u,\"hold\":%u,\"card\":\"%s\","
            "\"cam\":[%.1f,%.1f],\"imu\":false,\"ldr\":false,"
-           "\"note\":\"civ CAMP>MELEE>GUNS>ARTY; score then NEXT\"}",
+           "\"note\":\"turn civ: resolve then playback; CAMP>MELEE>GUNS>ARTY\"}",
            (unsigned)nW, (unsigned)nE, (unsigned)matchN, (unsigned)maxGen, (unsigned)killW,
            (unsigned)killE, (unsigned)matchTick, civOn ? "true" : "false",
-           autoNext ? "true" : "false", (unsigned)pace, (unsigned)age, AGE_NAME[age],
-           (unsigned)sciW, (unsigned)sciE, (unsigned)seq, cardText(), camX, camY);
+           autoTurns ? "true" : "false", (unsigned)pace, (unsigned)age, AGE_NAME[age],
+           (unsigned)sciW, (unsigned)sciE, (unsigned)turnN, (unsigned)seq, cardText(), camX, camY);
   srv->send(200, "application/json", buf);
 }
 
@@ -704,7 +909,7 @@ void warHttpBegin(ESP8266WebServer &http) {
   });
   http.on("/war/civ", HTTP_POST, []() {
     focusLatch = true;
-    warSetRules(true, autoNext, pace == 0 ? 1 : pace);
+    warSetRules(true, true, pace == 0 ? 1 : pace);
     warSeed();
     sendState();
   });
@@ -722,6 +927,18 @@ void warHttpBegin(ESP8266WebServer &http) {
   http.on("/war/age", HTTP_POST, []() {
     focusLatch = true;
     warAdvanceAge();
+    sendState();
+  });
+  http.on("/war/turn", HTTP_POST, []() {
+    focusLatch = true;
+    warStepTurn();
+    sendState();
+  });
+  http.on("/war/play", HTTP_POST, []() {
+    focusLatch = true;
+    autoTurns = true;
+    autoNext = true;
+    if (!cardLive() && seq == 0 && (int32_t)(millis() - playUntil) >= 0) resolveTurn();
     sendState();
   });
 }

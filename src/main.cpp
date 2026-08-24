@@ -769,7 +769,7 @@ static void enterMode(Mode m) {
   } else if (m == MODE_CYCLE) {
     cycleSeed();
   }
-  if (!cardLive()) startTitle(m);
+  if (m != MODE_WAR && m != MODE_TANK && !cardLive()) startTitle(m);
   Serial.print(F("mode="));
   Serial.println(MODE_NAME[m]);
 }

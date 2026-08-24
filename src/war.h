@@ -15,7 +15,8 @@ void warDropWall(int viewX, int viewY);
 void warReinforce(uint8_t team, bool arty);
 bool warTakeFocus();
 void warNudgeCam(int dx, int dy);
-void warSetRules(bool civ, bool autoNext, uint8_t pace); // pace 0 brawl, 1 long, 2 epic
+void warSetRules(bool civ, bool autoNext, uint8_t pace);
 void warAdvanceAge();
-bool warHolding(); // score card or waiting for Next
+void warStepTurn();
+bool warHolding();
 
