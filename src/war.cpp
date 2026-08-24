@@ -1,4 +1,5 @@
 #include "war.h"
+#include "card.h"
 
 #include <math.h>
 #include <string.h>
@@ -38,6 +39,31 @@ static bool focusLatch = false;
 static uint8_t *liveFb = nullptr;
 static ESP8266WebServer *srv = nullptr;
 static uint8_t boom[VH][VW];
+static bool civOn = true;
+static bool autoNext = true;
+static uint8_t pace = 1; // 0 brawl · 1 long · 2 epic
+static uint8_t age = 0;  // 0 camp · 1 melee · 2 guns · 3 arty
+static uint16_t sciW = 0, sciE = 0;
+static uint8_t seq = 0; // 0 live · 1 score · 2 next · 3 hold
+static bool harvested = false;
+static const char *AGE_NAME[] = {"CAMP", "MELEE", "GUNS", "ARTY"};
+
+static uint16_t matchCap() {
+  if (pace == 0) return 1600;
+  if (pace == 2) return 5600;
+  return 3600;
+}
+static uint16_t stallCap() {
+  if (pace == 0) return 520;
+  if (pace == 2) return 1600;
+  return 980;
+}
+static uint16_t ageNeed(uint8_t a) {
+  uint16_t base = (a == 0) ? 70 : (a == 1 ? 200 : 380);
+  if (pace == 0) return (uint16_t)(base * 0.55f);
+  if (pace == 2) return (uint16_t)(base * 1.45f);
+  return base;
+}
 
 bool warTakeFocus() {
   if (!focusLatch) return false;
@@ -200,7 +226,7 @@ static void deploy(bool evolve) {
   matchN++;
   for (uint8_t t = 0; t < 2; t++) {
     for (int i = 0; i < 6; i++) {
-      bool arty = (i == 0);
+      bool arty = (!civOn || age >= 3) && (i == 0);
       float x = t == TEAM_W ? (2.5f + frand() * 6.0f) : (WW - 3.5f - frand() * 6.0f);
       float y = 2.0f + frand() * (WH - 4.0f);
       const uint8_t *src = nullptr;
@@ -247,9 +273,47 @@ static void harvestElites() {
   if (maxGen < 250) maxGen++;
 }
 
-static void endMatch() {
-  harvestElites();
+static void finishToNext() {
+  if (!harvested) harvestElites();
+  harvested = false;
+  seq = 0;
   deploy(true);
+}
+
+static void requestEnd() {
+  if (seq) return;
+  harvestElites();
+  harvested = true;
+  char s[12];
+  snprintf(s, sizeof(s), "W%d-E%d", (int)(killW % 100), (int)(killE % 100));
+  cardShow(s, 2200);
+  seq = 1;
+}
+
+static void pumpCards() {
+  if (seq == 1 && !cardLive()) {
+    cardShow("NEXT", 1600);
+    seq = 2;
+    return;
+  }
+  if (seq == 2 && !cardLive()) {
+    if (autoNext) finishToNext();
+    else seq = 3;
+    return;
+  }
+}
+
+static void tryAgeUp() {
+  if (!civOn || age >= 3) return;
+  uint16_t need = ageNeed(age);
+  if ((uint16_t)(sciW + sciE) < need) return;
+  age++;
+  cardShow(AGE_NAME[age], 1800);
+}
+
+void warRematch() {
+  if (seq == 0) requestEnd();
+  else finishToNext();
 }
 
 void warSeed() {
@@ -259,11 +323,16 @@ void warSeed() {
   matchN = 0;
   killW = killE = 0;
   tick = 0;
+  matchTick = 0;
+  lastKillTick = 0;
+  sciW = sciE = 0;
+  age = civOn ? 0 : 2;
+  seq = 0;
+  harvested = false;
   buildMap();
   deploy(false);
+  if (civOn) cardShow("CAMP", 1800);
 }
-
-void warRematch() { endMatch(); }
 
 void warBegin() { warSeed(); }
 
@@ -316,8 +385,16 @@ static void tryMove(Unit &u, float nx, float ny) {
 }
 
 void warStep() {
+  pumpCards();
+  if (seq) return;
+
   tick++;
   matchTick++;
+  if ((tick % 12) == 0) {
+    sciW = (uint16_t)(sciW + nW);
+    sciE = (uint16_t)(sciE + nE);
+    tryAgeUp();
+  }
   for (int y = 0; y < VH; y++)
     for (int x = 0; x < VW; x++)
       if (boom[y][x] > 8) boom[y][x] -= 8;
@@ -327,10 +404,19 @@ void warStep() {
     Unit &u = us[i];
     if (!u.alive) continue;
     if (u.cd) u.cd--;
-    float speed = (u.role ? 0.07f : 0.16f) + (u.g[0] / 255.0f) * (u.role ? 0.10f : 0.24f);
+    float speed = (u.role ? 0.14f : 0.30f) + (u.g[0] / 255.0f) * (u.role ? 0.12f : 0.28f);
     float turn = 0.18f + (u.g[1] / 255.0f) * 0.50f;
     float range = (u.role ? 12.0f : 8.0f) + (u.g[2] / 255.0f) * (u.role ? 14.0f : 8.0f);
     float acc = 0.72f + (u.g[4] / 255.0f) * 0.26f;
+    if (civOn && age == 0) {
+      speed *= 0.18f;
+      range = 0;
+    } else if (civOn && age == 1) {
+      speed *= 0.55f;
+      range = 2.2f;
+    } else if (civOn && age == 2 && u.role) {
+      range = 0; // guns age: infantry only
+    }
 
     float edx = 0, edy = 0, ed2 = 1e9f;
     int ei = nearestEnemy(u, &edx, &edy, &ed2);
@@ -340,20 +426,26 @@ void warStep() {
     }
 
     bool canSee = los(u.x, u.y, us[ei].x, us[ei].y, u.role != 0);
-    bool stallPush = (matchTick - lastKillTick) > 180;
+    bool stallPush = (matchTick - lastKillTick) > (civOn ? 220 : 90);
     float holdX = (u.team == TEAM_W) ? 11.0f : (WW - 12.0f);
-    if (u.role) {
+    if (civOn && age == 0) {
+      float hx = (u.team == TEAM_W) ? 6.0f : (WW - 7.0f);
+      steer(u, hx - u.x, (WH * 0.5f) - u.y + (frand() - 0.5f) * 4.0f, turn);
+      tryMove(u, u.x + cosf(u.a) * speed, u.y + sinf(u.a) * speed);
+    } else if (u.role) {
       // artillery holds the back line, walks only to unmask
       float tx = holdX, ty = us[ei].y;
       steer(u, tx - u.x, ty - u.y, turn * 0.6f);
       if (fabsf(u.x - holdX) > 1.2f || !canSee) tryMove(u, u.x + cosf(u.a) * speed, u.y + sinf(u.a) * speed);
     } else {
-      float push = (u.team == TEAM_W) ? speed : -speed;
+      float push = (u.team == TEAM_W) ? speed * 1.15f : -speed * 1.15f;
       steer(u, edx, edy, turn);
-      tryMove(u, u.x + push * 0.75f + cosf(u.a) * speed * 0.35f, u.y + sinf(u.a) * speed);
+      tryMove(u, u.x + push + cosf(u.a) * speed * 0.15f, u.y + sinf(u.a) * speed);
     }
 
-    if (u.cd == 0 && (canSee || stallPush) && ed2 < range * range) {
+    bool mayShoot = range > 0.5f && u.cd == 0 && (canSee || stallPush) && ed2 < range * range;
+    if (civOn && u.role && age < 3) mayShoot = false;
+    if (mayShoot) {
       float j = (1.0f - acc) * 2.2f;
       fireFrom(u, us[ei].x + (frand() - 0.5f) * j, us[ei].y + (frand() - 0.5f) * j);
     }
@@ -423,12 +515,12 @@ void warStep() {
   }
   float tx = clampf(mx - VW * 0.5f, 0, WW - VW);
   float ty = clampf(my - VH * 0.5f, 0, WH - VH);
-  camX += (tx - camX) * 0.16f;
-  camY += (ty - camY) * 0.16f;
+  camX += (tx - camX) * 0.42f;
+  camY += (ty - camY) * 0.42f;
 
   // Stalemate: punch a lane so LOS exists; rematch if still dead.
   uint16_t stall = matchTick - lastKillTick;
-  if (stall == 240 || stall == 400) {
+  if (stall == 220 || stall == 440 || stall == 700) {
     int lx = clampi((int)mx, 8, WW - 10);
     for (int y = 1; y < WH - 1; y++) {
       wall[y][lx] = 0;
@@ -436,7 +528,8 @@ void warStep() {
       wall[y][lx + 2] = 0;
     }
   }
-  if ((nW == 0 || nE == 0 || matchTick > 1800 || stall > 650) && matchTick > 80) endMatch();
+  if ((nW == 0 || nE == 0 || matchTick > matchCap() || stall > stallCap()) && matchTick > 80)
+    requestEnd();
 }
 
 static void plot(uint8_t fb[][32], int x, int y, uint8_t c) {
@@ -506,18 +599,32 @@ void warNudgeCam(int dx, int dy) {
   camY = clampf(camY + dy, 0, WH - VH);
 }
 
+void warSetRules(bool civ, bool autoN, uint8_t p) {
+  civOn = civ;
+  autoNext = autoN;
+  pace = p > 2 ? 2 : p;
+}
+
+void warAdvanceAge() { tryAgeUp(); if (civOn && age < 3) { sciW = sciE = 400; tryAgeUp(); } }
+
+bool warHolding() { return seq != 0; }
+
 void warSetFb(uint8_t (*fb)[32]) { liveFb = &fb[0][0]; }
 
 static void sendState() {
   tally();
-  char buf[720];
+  char buf[900];
   snprintf(buf, sizeof(buf),
            "{\"ok\":true,\"sim\":\"war\",\"w\":32,\"h\":9,\"west\":%u,\"east\":%u,"
            "\"match\":%u,\"gen\":%u,\"kw\":%u,\"ke\":%u,\"tick\":%u,"
+           "\"civ\":%s,\"auto\":%s,\"pace\":%u,\"age\":%u,\"age_name\":\"%s\","
+           "\"sciw\":%u,\"scie\":%u,\"hold\":%u,\"card\":\"%s\","
            "\"cam\":[%.1f,%.1f],\"imu\":false,\"ldr\":false,"
-           "\"note\":\"west=dot+tailE east=dot+tailW plus=arty berm/bunker\"}",
+           "\"note\":\"civ CAMP>MELEE>GUNS>ARTY; score then NEXT\"}",
            (unsigned)nW, (unsigned)nE, (unsigned)matchN, (unsigned)maxGen, (unsigned)killW,
-           (unsigned)killE, (unsigned)matchTick, camX, camY);
+           (unsigned)killE, (unsigned)matchTick, civOn ? "true" : "false",
+           autoNext ? "true" : "false", (unsigned)pace, (unsigned)age, AGE_NAME[age],
+           (unsigned)sciW, (unsigned)sciE, (unsigned)seq, cardText(), camX, camY);
   srv->send(200, "application/json", buf);
 }
 
@@ -585,6 +692,36 @@ void warHttpBegin(ESP8266WebServer &http) {
   });
   http.on("/war/pan", HTTP_POST, []() {
     warNudgeCam(argI("dx", 0), argI("dy", 0));
+    sendState();
+  });
+  http.on("/war/opts", HTTP_POST, []() {
+    focusLatch = true;
+    bool civ = srv->hasArg("civ") ? srv->arg("civ").toInt() != 0 : civOn;
+    bool an = srv->hasArg("auto") ? srv->arg("auto").toInt() != 0 : autoNext;
+    uint8_t p = srv->hasArg("pace") ? (uint8_t)srv->arg("pace").toInt() : pace;
+    warSetRules(civ, an, p);
+    sendState();
+  });
+  http.on("/war/civ", HTTP_POST, []() {
+    focusLatch = true;
+    warSetRules(true, autoNext, pace == 0 ? 1 : pace);
+    warSeed();
+    sendState();
+  });
+  http.on("/war/brawl", HTTP_POST, []() {
+    focusLatch = true;
+    warSetRules(false, true, 0);
+    warSeed();
+    sendState();
+  });
+  http.on("/war/epic", HTTP_POST, []() {
+    focusLatch = true;
+    warSetRules(true, autoNext, 2);
+    sendState();
+  });
+  http.on("/war/age", HTTP_POST, []() {
+    focusLatch = true;
+    warAdvanceAge();
     sendState();
   });
 }

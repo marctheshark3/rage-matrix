@@ -5,7 +5,7 @@ Firmware, host twins, and a small HTML hub for the **Maker LEDDisplay2** — a 3
 The 32×9 is a **camera** into a larger world. Two sims stay resident in RAM; switching modes does not wipe them.
 
 - **Tank** — 64×18 torus. Tadpole prey vs chevron hunters. Always-swim, graze-and-go, hunter-lag camera.
-- **War** — 48×18 bounded field. West vs east, infantry + artillery, berms / bunkers, LOS, evolve-the-winners.
+- **War** — 48×18 bounded field. Default civ campaign: CAMP → MELEE → GUNS → ARTY, then they shoot. Match end flashes `W3-E5` then `NEXT`.
 - **Reel** — wave, fire, plasma, life, stars, … Each mode flashes a title card (`WAR ZONE`, `TANK`, `FIRE`, …) then starts.
 
 Not a HUB75 wall. Not e-ink. No IMU / LDR on the v2.2 PCB — ADC is the LiPo divider.

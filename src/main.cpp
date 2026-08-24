@@ -25,6 +25,7 @@
 #include "wifi_ota.h"
 #include "critters.h"
 #include "war.h"
+#include "card.h"
 
 #define WAVE_W 32
 #define WAVE_H 9
@@ -92,9 +93,6 @@ static const char *MODE_TITLE[MODE_COUNT] = {
     "SPARK", "RAIN", "BOUNCE", "LIFE", "PULSE",
     "PLASMA", "TUNNEL", "FIRE", "LISSA", "CA",
     "STARS", "XOR", "RINGS", "CYCLE", "GRID", "DISC", "TANK", "WAR ZONE"};
-
-static char titleBuf[12] = "";
-static uint32_t titleUntil = 0;
 
 static void startTitle(Mode m);
 static void renderTitle();
@@ -270,30 +268,27 @@ static void drawText(int x0, int y0, const char *s, uint8_t c) {
 
 static void startTitle(Mode m) {
   if (m == MODE_TEXT) {
-    titleUntil = 0;
-    titleBuf[0] = 0;
+    cardClear();
     return;
   }
-  strncpy(titleBuf, MODE_TITLE[m], sizeof(titleBuf) - 1);
-  titleBuf[sizeof(titleBuf) - 1] = 0;
-  titleUntil = millis() + ((m == MODE_WAR || m == MODE_TANK) ? 2200 : 1600);
+  cardShow(MODE_TITLE[m], (m == MODE_WAR || m == MODE_TANK) ? 2200 : 1600);
 }
 
 static void renderTitle() {
   fbClear();
-  int n = (int)strlen(titleBuf);
+  const char *s = cardText();
+  int n = (int)strlen(s);
   if (!n) return;
   int w = n * 4 - 1;
   int x0 = (WAVE_W - w) / 2;
   uint8_t c = brightScale;
-  uint32_t left = titleUntil > millis() ? titleUntil - millis() : 0;
-  if (left < 280) c = (uint8_t)((c * left) / 280);
-  drawText(x0, 2, titleBuf, c ? c : 8);
+  // fade is handled by caller timeout; keep a short fade via leftover isn't here
+  drawText(x0, 2, s, c ? c : 8);
   for (int x = x0; x < x0 + w && x < WAVE_W; x++)
     fbPlot(x, 8, c / 4);
 }
 
-static bool titleLive() { return titleUntil && (int32_t)(millis() - titleUntil) < 0; }
+static bool titleLive() { return cardLive(); }
 
 static uint16_t sparsePx(float n) {
   if (n < kOff) return 0;
@@ -774,7 +769,7 @@ static void enterMode(Mode m) {
   } else if (m == MODE_CYCLE) {
     cycleSeed();
   }
-  startTitle(m);
+  if (!cardLive()) startTitle(m);
   Serial.print(F("mode="));
   Serial.println(MODE_NAME[m]);
 }
@@ -936,21 +931,21 @@ static bool parseModeName(const char *s, Mode *out) {
 
 static void sendModeJson(ESP8266WebServer &http) {
   char buf[360];
-  long left = titleLive() ? (long)(titleUntil - millis()) : 0;
+  long left = (long)cardLeftMs();
   snprintf(buf, sizeof(buf),
            "{\"ok\":true,\"mode\":\"%s\",\"title\":\"%s\",\"title_ms\":%ld,\"auto\":%s,\"n\":%u}",
-           MODE_NAME[mode], titleBuf, left, autoReel ? "true" : "false", (unsigned)MODE_COUNT);
+           MODE_NAME[mode], cardText(), left, autoReel ? "true" : "false", (unsigned)MODE_COUNT);
   http.send(200, "application/json", buf);
 }
 
 static void sendPanelJson(ESP8266WebServer &http) {
   static char buf[288 * 2 + 220];
-  long left = titleLive() ? (long)(titleUntil - millis()) : 0;
+  long left = (long)cardLeftMs();
   char *p = buf;
   p += snprintf(p, 200,
                 "{\"ok\":true,\"sim\":\"%s\",\"mode\":\"%s\",\"title\":\"%s\","
                 "\"title_ms\":%ld,\"w\":32,\"h\":9,\"px\":\"",
-                MODE_NAME[mode], MODE_NAME[mode], titleBuf, left);
+                MODE_NAME[mode], MODE_NAME[mode], cardText(), left);
   static const char *hex = "0123456789abcdef";
   for (int y = 0; y < WAVE_H; y++) {
     for (int x = 0; x < WAVE_W; x++) {
@@ -1041,7 +1036,7 @@ void loop() {
     renderTitle();
     fbShow();
     frame++;
-    delay(18);
+    delay(8);
     return;
   }
 
@@ -1094,5 +1089,5 @@ void loop() {
 
   fbShow();
   frame++;
-  delay(18);
+  delay(8);
 }

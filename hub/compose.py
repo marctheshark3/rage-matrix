@@ -95,16 +95,17 @@ def compose() -> Path:
   </div>
 
   <h2>War</h2>
-  <p class="muted">48×18 bounded field. West vs east. Infantry + artillery. Berms (arty can
-  fire over) and bunkers (stop everything). LOS fire. Match ends → harvest elites →
-  mutate → rematch.</p>
+  <p class="muted">Civ campaign: CAMP → MELEE → GUNS → ARTY. Match end flashes score, then NEXT.</p>
   <div class="acts">
     <button hx-post="/api/matrix/v1/war/focus" hx-target="#tank-board" hx-swap="outerHTML">Watch war</button>
+    <button hx-post="/api/matrix/v1/war/civ" hx-target="#tank-board" hx-swap="outerHTML">Civ campaign</button>
+    <button hx-post="/api/matrix/v1/war/brawl" hx-target="#tank-board" hx-swap="outerHTML">Fast brawl</button>
+    <button hx-post="/api/matrix/v1/war/epic" hx-target="#tank-board" hx-swap="outerHTML">Epic pace</button>
+    <button hx-post="/api/matrix/v1/war/age" hx-target="#tank-board" hx-swap="outerHTML">Advance age</button>
+    <button hx-post="/api/matrix/v1/war/opts" hx-vals='{{"auto":"1"}}' hx-target="#tank-board" hx-swap="outerHTML">Auto next</button>
+    <button hx-post="/api/matrix/v1/war/opts" hx-vals='{{"auto":"0"}}' hx-target="#tank-board" hx-swap="outerHTML">Hold for next</button>
     <button hx-post="/api/matrix/v1/war/west" hx-target="#tank-board" hx-swap="outerHTML">+ west</button>
     <button hx-post="/api/matrix/v1/war/east" hx-target="#tank-board" hx-swap="outerHTML">+ east</button>
-    <button hx-post="/api/matrix/v1/war/west" hx-vals='{{"arty":"1"}}' hx-target="#tank-board" hx-swap="outerHTML">+ west arty</button>
-    <button hx-post="/api/matrix/v1/war/east" hx-vals='{{"arty":"1"}}' hx-target="#tank-board" hx-swap="outerHTML">+ east arty</button>
-    <button hx-post="/api/matrix/v1/war/wall" hx-target="#tank-board" hx-swap="outerHTML">Drop berm</button>
     <button hx-post="/api/matrix/v1/war/next" hx-target="#tank-board" hx-swap="outerHTML">Next match</button>
     <button hx-post="/api/matrix/v1/war/seed" hx-target="#tank-board" hx-swap="outerHTML">New campaign</button>
   </div>

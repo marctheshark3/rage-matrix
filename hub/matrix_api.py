@@ -30,7 +30,7 @@ _tank = None
 _war = None
 
 TANK_CMDS = {"feed", "scatter", "shake", "seed", "follow", "pan", "hunt", "focus"}
-WAR_CMDS = {"next", "wall", "west", "east", "focus", "pan", "seed"}
+WAR_CMDS = {"next", "wall", "west", "east", "focus", "pan", "seed", "civ", "brawl", "epic", "opts", "age"}
 MODES = (
     "tank", "war", "wave", "fire", "plasma", "life", "stars", "clock",
     "rain", "tunnel", "bars", "pulse", "sine", "bounce", "spark",
@@ -224,13 +224,13 @@ def board_html() -> str:
     src_cls = "pill-ok" if src == "live" else "pill-warn"
     sim = st.get("sim") or _view
     if sim == "war":
-        note = "west=tailE · east=tailW · plus=arty · berm/bunker · shots=full bright"
+        note = "CAMP → MELEE → GUNS → ARTY. Score card then NEXT. Hold = wait for Next match."
         kpis = f"""
     <div class="kpi"><div class="muted">west</div><strong>{st.get("west", 0)}</strong></div>
     <div class="kpi"><div class="muted">east</div><strong>{st.get("east", 0)}</strong></div>
-    <div class="kpi"><div class="muted">match</div><strong>{st.get("match", 0)}</strong></div>
-    <div class="kpi"><div class="muted">gen</div><strong>{st.get("gen", 0)}</strong></div>
-    <div class="kpi"><div class="muted">kills</div><strong>{st.get("kw", 0)}–{st.get("ke", 0)}</strong></div>"""
+    <div class="kpi"><div class="muted">score</div><strong>{st.get("kw", 0)}–{st.get("ke", 0)}</strong></div>
+    <div class="kpi"><div class="muted">age</div><strong>{html_mod.escape(str(st.get("age_name") or "—"))}</strong></div>
+    <div class="kpi"><div class="muted">match</div><strong>{st.get("match", 0)}</strong></div>"""
     elif sim == "tank":
         note = "tadpole=prey · chevron=hunter · ADC=LiPo · no IMU/LDR"
         kpis = f"""
