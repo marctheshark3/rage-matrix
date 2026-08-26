@@ -50,20 +50,22 @@ static uint16_t turnN = 0;
 static uint32_t playUntil = 0;
 static bool autoTurns = true;
 static const char *AGE_NAME[] = {"CAMP", "MELEE", "GUNS", "ARTY"};
-static const float CITY_X[4] = {5.0f, 5.0f, 43.0f, 43.0f};
-static const float CITY_Y[4] = {5.0f, 13.0f, 5.0f, 13.0f};
+static float cityX[4] = {5.0f, 5.0f, 43.0f, 43.0f};
+static float cityY[4] = {5.0f, 13.0f, 5.0f, 13.0f};
+static uint8_t nCity[2] = {2, 2};
+static uint32_t worldSeed = 1;
+static uint8_t ageW = 0, ageE = 0;
+static uint8_t spawnEvery = 6, popCap = 6, nBerm = 3, nBunker = 1;
+static uint16_t gate[3] = {50, 130, 220};
+static uint8_t growTurns = 8, wanderPct = 40;
+static uint16_t lastPlayMs = 2200;
+static bool seedPinned = false;
 
-static uint16_t playMs() {
-  if (pace == 0) return 1400;
-  if (pace == 2) return 2800;
-  return 2200;
+static uint16_t playMs() { return lastPlayMs ? lastPlayMs : 2200; }
+static void rollPlayMs() {
+  uint16_t base = (pace == 0) ? 1400 : (pace == 2 ? 2800 : 2200);
+  lastPlayMs = (uint16_t)(base + random(0, (int)(base / 5) + 1) - (int)(base / 10));
 }
-static uint16_t turnCap() {
-  if (pace == 0) return 16;
-  if (pace == 2) return 36;
-  return 24;
-}
-
 static uint16_t matchCap() {
   if (pace == 0) return 1600;
   if (pace == 2) return 5600;
@@ -73,12 +75,6 @@ static uint16_t stallCap() {
   if (pace == 0) return 520;
   if (pace == 2) return 1600;
   return 980;
-}
-static uint16_t ageNeed(uint8_t a) {
-  uint16_t base = (a == 0) ? 28 : (a == 1 ? 72 : 140);
-  if (pace == 0) return (uint16_t)(base * 0.7f);
-  if (pace == 2) return (uint16_t)(base * 1.35f);
-  return base;
 }
 
 bool warTakeFocus() {
@@ -205,6 +201,45 @@ static void fireFrom(Unit &u, float tx, float ty) {
   u.cd = u.role ? (18 + (255 - rof) / 14) : (8 + (255 - rof) / 20);
 }
 
+static void rollWorld() {
+  if (worldSeed == 0)
+    worldSeed = (uint32_t)millis() ^ ((uint32_t)random(1, 0x7fffffff) << 1) ^ (uint32_t)analogRead(A0);
+  randomSeed(worldSeed);
+  nCity[0] = (uint8_t)(1 + random(0, 2));
+  nCity[1] = (uint8_t)(1 + random(0, 2));
+  for (uint8_t t = 0; t < 2; t++) {
+    for (uint8_t c = 0; c < 2; c++) {
+      int i = t * 2 + c;
+      float x0 = (t == TEAM_W) ? 4.0f : 34.0f;
+      cityX[i] = x0 + frand() * 10.0f;
+      cityY[i] = 3.0f + frand() * 12.0f;
+      if (c == 1 && nCity[t] == 2 && fabsf(cityY[i] - cityY[t * 2]) < 4.0f)
+        cityY[i] = clampf(cityY[i] + (cityY[i] > 9 ? 4.0f : -4.0f), 3.0f, 15.0f);
+    }
+  }
+  nBerm = (uint8_t)(2 + random(0, 4));
+  nBunker = (uint8_t)random(0, 3);
+  spawnEvery = (uint8_t)(4 + random(0, 7));
+  popCap = (uint8_t)(5 + random(0, 4));
+  growTurns = (uint8_t)(6 + random(0, 8));
+  wanderPct = (uint8_t)(18 + random(0, 50));
+  uint16_t g0 = (uint16_t)(32 + random(0, 36));
+  uint16_t g1 = (uint16_t)(g0 + 45 + random(0, 55));
+  uint16_t g2 = (uint16_t)(g1 + 55 + random(0, 80));
+  if (pace == 0) {
+    g0 = (uint16_t)(g0 * 0.65f);
+    g1 = (uint16_t)(g1 * 0.65f);
+    g2 = (uint16_t)(g2 * 0.65f);
+  } else if (pace == 2) {
+    g0 = (uint16_t)(g0 * 1.45f);
+    g1 = (uint16_t)(g1 * 1.45f);
+    g2 = (uint16_t)(g2 * 1.45f);
+  }
+  gate[0] = g0;
+  gate[1] = g1;
+  gate[2] = g2;
+}
+
 static void buildMap() {
   memset(wall, 0, sizeof(wall));
   for (int x = 0; x < WW; x++) {
@@ -216,7 +251,7 @@ static void buildMap() {
     wall[y][WW - 1] = 1;
   }
   // berms + one bunker in the midfield (keep lanes open or nobody dies)
-  for (int k = 0; k < 3; k++) {
+  for (int k = 0; k < nBerm; k++) {
     int x = 16 + random(0, 16);
     int y = 2 + random(0, WH - 5);
     int len = 3 + random(0, 5);
@@ -227,7 +262,7 @@ static void buildMap() {
       if (xx > 2 && xx < WW - 3 && yy > 1 && yy < WH - 2) wall[yy][xx] = 1;
     }
   }
-  for (int k = 0; k < 1; k++) {
+  for (int k = 0; k < nBunker; k++) {
     int x = 18 + random(0, 12);
     int y = 4 + random(0, 8);
     for (int dy = 0; dy < 2; dy++)
@@ -246,12 +281,14 @@ static void deploy(bool evolve) {
   playUntil = 0;
   matchN++;
   for (uint8_t t = 0; t < 2; t++) {
-    for (int c = 0; c < 2; c++) {
+    uint8_t nc = nCity[t] ? nCity[t] : 1;
+    uint8_t per = (uint8_t)(1 + random(0, 2));
+    for (uint8_t c = 0; c < nc; c++) {
       int ci = t * 2 + c;
-      for (int k = 0; k < 2; k++) {
+      for (uint8_t k = 0; k < per; k++) {
         bool arty = (!civOn || age >= 3) && (k == 0 && c == 0);
-        float x = CITY_X[ci] + (frand() - 0.5f) * 3.2f;
-        float y = CITY_Y[ci] + (frand() - 0.5f) * 2.4f;
+        float x = cityX[ci] + (frand() - 0.5f) * 3.2f;
+        float y = cityY[ci] + (frand() - 0.5f) * 2.4f;
         const uint8_t *src = nullptr;
         uint8_t gen = 0;
         if (evolve && eliteN[t] > 0) {
@@ -328,10 +365,19 @@ static void pumpCards() {
 }
 
 static void tryAgeUp() {
-  if (!civOn || age >= 3) return;
-  if (turnN >= 220) age = 3;
-  else if (turnN >= 130) age = 2;
-  else if (turnN >= 50) age = 1;
+  if (!civOn) return;
+  while (ageW < 3 && sciW >= gate[ageW]) ageW++;
+  while (ageE < 3 && sciE >= gate[ageE]) ageE++;
+  age = ageW > ageE ? ageW : ageE;
+}
+
+static int homeCity(const Unit &u) {
+  int base = u.team * 2;
+  if (nCity[u.team] <= 1) return base;
+  float d0 = (u.x - cityX[base]) * (u.x - cityX[base]) + (u.y - cityY[base]) * (u.y - cityY[base]);
+  float d1 = (u.x - cityX[base + 1]) * (u.x - cityX[base + 1]) +
+             (u.y - cityY[base + 1]) * (u.y - cityY[base + 1]);
+  return d1 < d0 ? base + 1 : base;
 }
 
 void warRematch() {
@@ -350,12 +396,15 @@ void warSeed() {
   matchTick = 0;
   lastKillTick = 0;
   sciW = sciE = 0;
-  age = civOn ? 0 : 2;
+  age = ageW = ageE = civOn ? 0 : 2;
   seq = 0;
   harvested = false;
   turnN = 0;
   playUntil = 0;
   autoTurns = true;
+  if (!seedPinned) worldSeed = 0;
+  seedPinned = false;
+  rollWorld();
   buildMap();
   deploy(false);
   cardClear();
@@ -434,18 +483,30 @@ static void resolveTurn() {
   turnN++;
   tick = turnN;
   matchTick = turnN;
-  sciW = (uint16_t)(sciW + 4 + nW);
-  sciE = (uint16_t)(sciE + 4 + nE);
+  sciW = (uint16_t)(sciW + 3 + nW + random(0, 3));
+  sciE = (uint16_t)(sciE + 3 + nE + random(0, 3));
   tryAgeUp();
 
-  // Cities slowly replace the dead. World does not reset.
-  if ((turnN % 6) == 0) {
+  // Cities replace the dead. Occasional drought / boom / city drift.
+  uint8_t ev = (uint8_t)random(0, 12);
+  if (ev == 2 && nCity[0] + nCity[1] > 0) {
+    int ci = random(0, 2) + ((random(0, 2) == 0) ? 0 : 2);
+    if (nCity[ci / 2] > (ci & 1)) {
+      cityX[ci] = clampf(cityX[ci] + (frand() - 0.5f) * 2.4f, 3.0f, WW - 4.0f);
+      cityY[ci] = clampf(cityY[ci] + (frand() - 0.5f) * 2.4f, 3.0f, WH - 3.0f);
+    }
+  }
+  if (ev != 0 && spawnEvery && (turnN % spawnEvery) == 0) {
+    uint8_t extra = (ev == 1) ? 1 : 0;
     for (uint8_t t = 0; t < 2; t++) {
       uint8_t n = (t == TEAM_W) ? nW : nE;
-      if (n >= 6) continue;
-      int ci = t * 2 + (turnN & 1);
-      spawnUnit(CITY_X[ci] + (frand() - 0.5f) * 1.6f, CITY_Y[ci] + (frand() - 0.5f) * 1.2f, t,
-                (age >= 3 && n == 0) ? 1 : 0, eliteN[t] ? elite[t][0] : nullptr, maxGen);
+      uint8_t cap = popCap + extra;
+      if (n >= cap) continue;
+      uint8_t nc = nCity[t] ? nCity[t] : 1;
+      int ci = t * 2 + (turnN % nc);
+      uint8_t ta = (t == TEAM_W) ? ageW : ageE;
+      spawnUnit(cityX[ci] + (frand() - 0.5f) * 1.6f, cityY[ci] + (frand() - 0.5f) * 1.2f, t,
+                (ta >= 3 && random(0, 5) == 0) ? 1 : 0, eliteN[t] ? elite[t][0] : nullptr, maxGen);
     }
     tally();
   }
@@ -454,15 +515,19 @@ static void resolveTurn() {
     Unit &u = us[i];
     if (!u.alive) continue;
     uint16_t life = (turnN > u.born) ? (uint16_t)(turnN - u.born) : 0;
-    bool scout = u.g[7] > 140;
-    bool pack = u.g[1] > 110;
+    uint8_t ta = (u.team == TEAM_W) ? ageW : ageE;
+    bool scout = u.g[7] > (uint8_t)(110 + random(0, 40));
+    bool pack = u.g[1] > 100;
+    bool homebody = u.g[4] > 155;
+    bool aggro = u.g[5] > 120;
     float edx = 0, edy = 0, ed2 = 1e9f;
     int ei = nearestEnemy(u, &edx, &edy, &ed2);
-    int home = (u.team == TEAM_W ? 0 : 2) + (u.y > WH * 0.5f);
-    float tx = CITY_X[home], ty = CITY_Y[home];
-    float step = 0.28f + (life > 20 ? 0.18f : 0) + (life > 60 ? 0.12f : 0);
+    int home = homeCity(u);
+    float tx = cityX[home], ty = cityY[home];
+    float step = 0.16f + (u.g[0] / 255.0f) * 0.55f;
+    if (life > 20) step += 0.10f;
+    if (life > 60) step += 0.10f;
 
-    // Friend pull — they bunch and move as a group.
     float fx = 0, fy = 0;
     int fn = 0;
     for (int j = 0; j < MAX_U; j++) {
@@ -475,42 +540,50 @@ static void resolveTurn() {
         fn++;
       }
     }
-    if (age == 0) {
-      tx += (frand() - 0.5f) * 3.0f + (u.team == TEAM_W ? 1.4f : -1.4f);
-      ty += (frand() - 0.5f) * 2.4f;
-      step *= 0.55f;
-    } else if (!scout && age < 2) {
-      tx += (u.team == TEAM_W ? 4.0f : -4.0f);
-      ty += (frand() - 0.5f) * 3.0f;
-    } else if (ei >= 0 && (age >= 2 || scout)) {
+    if (ta == 0 || homebody) {
+      tx += (frand() - 0.5f) * 3.2f + (u.team == TEAM_W ? 1.0f : -1.0f);
+      ty += (frand() - 0.5f) * 2.6f;
+      step *= homebody ? 0.45f : 0.60f;
+    } else if (!scout && !aggro && ta < 2) {
+      tx += (u.team == TEAM_W ? 3.5f : -3.5f);
+      ty += (frand() - 0.5f) * 3.4f;
+    } else if (ei >= 0 && (ta >= 2 || scout || aggro)) {
       tx = us[ei].x;
       ty = us[ei].y;
-      step += 0.15f;
+      step += 0.12f + (u.g[5] / 255.0f) * 0.18f;
     }
     if (pack && fn) {
-      tx = u.x + fx / fn * 0.55f + (tx - u.x) * 0.55f;
-      ty = u.y + fy / fn * 0.55f + (ty - u.y) * 0.55f;
+      float pw = 0.35f + (u.g[1] / 255.0f) * 0.35f;
+      tx = u.x + fx / fn * pw + (tx - u.x) * (1.0f - pw);
+      ty = u.y + fy / fn * pw + (ty - u.y) * (1.0f - pw);
+    }
+    if (random(0, 100) < wanderPct) {
+      tx += (frand() - 0.5f) * 5.0f;
+      ty += (frand() - 0.5f) * 4.0f;
     }
     float dx = tx - u.x, dy = ty - u.y;
     float d = sqrtf(dx * dx + dy * dy);
     if (d > 0.15f) tryMove(u, u.x + dx / d * step, u.y + dy / d * step);
 
-    if (ei < 0 || life < 8) continue; // grow up before they fight
+    if (ei < 0 || life < growTurns) continue;
     bool see = los(u.x, u.y, us[ei].x, us[ei].y, u.role != 0);
-    if (age == 1 && ed2 < 2.8f) {
-      us[ei].hp -= 0.22f;
+    float meleeR = 2.2f + (u.g[2] / 255.0f) * 1.6f;
+    float gunR = 48.0f + (u.g[2] / 255.0f) * 36.0f;
+    if (ta == 1 && ed2 < meleeR) {
+      us[ei].hp -= 0.16f + (u.g[5] / 255.0f) * 0.18f;
       if (us[ei].hp <= 0) applyKill(ei, u.team);
-    } else if (age == 2 && !u.role && see && ed2 < 64.0f && (turnN % 2) == (i & 1)) {
+    } else if (ta == 2 && !u.role && see && ed2 < gunR && (turnN % 2) == (i & 1)) {
       fireFrom(u, us[ei].x, us[ei].y);
-      us[ei].hp -= 0.28f;
+      us[ei].hp -= 0.22f + (u.g[3] / 255.0f) * 0.16f;
       if (us[ei].hp <= 0) applyKill(ei, u.team);
-    } else if (age >= 3 && see && ed2 < (u.role ? 180.0f : 64.0f) && (turnN % 2) == (i & 1)) {
+    } else if (ta >= 3 && see && ed2 < (u.role ? 180.0f : gunR) && (turnN % 2) == (i & 1)) {
       fireFrom(u, us[ei].x, us[ei].y);
-      us[ei].hp -= u.role ? 0.45f : 0.28f;
+      us[ei].hp -= u.role ? 0.40f : 0.22f;
       if (us[ei].hp <= 0) applyKill(ei, u.team);
     }
   }
   tally();
+  rollPlayMs();
   playUntil = millis() + playMs();
 }
 
@@ -735,14 +808,17 @@ void warRender(uint8_t fb[][32], uint8_t bright) {
     }
   }
   if (civOn) {
-    for (int c = 0; c < 4; c++) {
-      int x = (int)lroundf(CITY_X[c] - camX);
-      int y = (int)lroundf(CITY_Y[c] - camY);
-      uint8_t c0 = (uint8_t)(b * 0.72f);
-      plot(fb, x, y, c0);
-      plot(fb, x + 1, y, c0 / 2);
-      plot(fb, x, y + 1, c0 / 2);
-      plot(fb, x - 1, y, c0 / 3);
+    for (uint8_t t = 0; t < 2; t++) {
+      for (uint8_t c = 0; c < nCity[t]; c++) {
+        int i = t * 2 + c;
+        int x = (int)lroundf(cityX[i] - camX);
+        int y = (int)lroundf(cityY[i] - camY);
+        uint8_t c0 = (uint8_t)(b * 0.72f);
+        plot(fb, x, y, c0);
+        plot(fb, x + 1, y, c0 / 2);
+        plot(fb, x, y + 1, c0 / 2);
+        plot(fb, x - 1, y, c0 / 3);
+      }
     }
   }
   for (int i = 0; i < MAX_S; i++) {
@@ -809,7 +885,9 @@ void warSetRules(bool civ, bool autoN, uint8_t p) {
 }
 
 void warAdvanceAge() {
-  if (age < 3) age++;
+  if (ageW < 3) ageW++;
+  if (ageE < 3) ageE++;
+  age = ageW > ageE ? ageW : ageE;
 }
 
 bool warHolding() { return seq != 0; }
@@ -823,13 +901,16 @@ static void sendState() {
            "{\"ok\":true,\"sim\":\"war\",\"w\":32,\"h\":9,\"west\":%u,\"east\":%u,"
            "\"match\":%u,\"gen\":%u,\"kw\":%u,\"ke\":%u,\"tick\":%u,"
            "\"civ\":%s,\"auto\":%s,\"pace\":%u,\"age\":%u,\"age_name\":\"%s\","
-           "\"sciw\":%u,\"scie\":%u,\"turn\":%u,\"hold\":%u,\"card\":\"%s\","
+           "\"agew\":%u,\"agee\":%u,\"seed\":%lu,\"spawn\":%u,\"pop\":%u,"
+           "\"cities\":[%u,%u],\"sciw\":%u,\"scie\":%u,\"turn\":%u,\"hold\":%u,\"card\":\"%s\","
            "\"cam\":[%.1f,%.1f],\"imu\":false,\"ldr\":false,"
-           "\"note\":\"turn civ: resolve then playback; CAMP>MELEE>GUNS>ARTY\"}",
+           "\"note\":\"seeded civ: cities/genes/ages roll; pixels only\"}",
            (unsigned)nW, (unsigned)nE, (unsigned)matchN, (unsigned)maxGen, (unsigned)killW,
            (unsigned)killE, (unsigned)matchTick, civOn ? "true" : "false",
            autoTurns ? "true" : "false", (unsigned)pace, (unsigned)age, AGE_NAME[age],
-           (unsigned)sciW, (unsigned)sciE, (unsigned)turnN, (unsigned)seq, cardText(), camX, camY);
+           (unsigned)ageW, (unsigned)ageE, (unsigned long)worldSeed, (unsigned)spawnEvery,
+           (unsigned)popCap, (unsigned)nCity[0], (unsigned)nCity[1], (unsigned)sciW,
+           (unsigned)sciE, (unsigned)turnN, (unsigned)seq, cardText(), camX, camY);
   srv->send(200, "application/json", buf);
 }
 
@@ -905,6 +986,11 @@ void warHttpBegin(ESP8266WebServer &http) {
     bool an = srv->hasArg("auto") ? srv->arg("auto").toInt() != 0 : autoNext;
     uint8_t p = srv->hasArg("pace") ? (uint8_t)srv->arg("pace").toInt() : pace;
     warSetRules(civ, an, p);
+    if (srv->hasArg("seed")) {
+      worldSeed = (uint32_t)srv->arg("seed").toInt();
+      seedPinned = true;
+      warSeed();
+    }
     sendState();
   });
   http.on("/war/civ", HTTP_POST, []() {
