@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Matrix API — tank (pred/prey) + war (army) live ESP / twin."""
+"""Matrix API — sealed tank, war, and aquarium ESP worlds with host twins."""
 from __future__ import annotations
 
 import html as html_mod
@@ -28,11 +28,13 @@ if str(SIM_ROOT) not in sys.path:
 _view = "tank"
 _tank = None
 _war = None
+_aquarium = None
 
 TANK_CMDS = {"feed", "scatter", "shake", "seed", "follow", "pan", "hunt", "focus"}
 WAR_CMDS = {"next", "wall", "west", "east", "focus", "pan", "seed", "civ", "brawl", "epic", "opts", "age", "turn", "play"}
+AQUARIUM_CMDS = {"focus", "pan"}
 MODES = (
-    "tank", "war", "wave", "fire", "plasma", "life", "stars", "clock",
+    "tank", "war", "aquarium", "wave", "fire", "plasma", "life", "stars", "clock",
     "rain", "tunnel", "bars", "pulse", "sine", "bounce", "spark",
     "lissa", "ca", "xor", "rings", "cycle", "grid", "disc", "text",
 )
@@ -58,6 +60,16 @@ def _war_get():
         _war.seed()
     _war.step()
     return _war
+
+
+def _aquarium_get():
+    global _aquarium
+    if _aquarium is None:
+        from sim.aquarium import Aquarium
+
+        _aquarium = Aquarium()
+    _aquarium.step()
+    return _aquarium
 
 
 def _rust():
@@ -100,6 +112,8 @@ def pull_fb(view: str | None = None) -> tuple[dict, str]:
                 extra = _http("GET", "/war.json")
             elif mode == "tank":
                 extra = _http("GET", "/tank.json")
+            elif mode == "aquarium":
+                extra = _http("GET", "/aquarium.json")
         except Exception:
             extra = {}
         extra.update(st)
@@ -107,7 +121,8 @@ def pull_fb(view: str | None = None) -> tuple[dict, str]:
         extra["sim"] = mode
         return extra, extra.get("px") or ""
     except Exception:
-        rust = _rust()
+        # Rust implements tank/war only; aquarium remains a sealed twin.
+        rust = _rust() if v != "aquarium" else None
         if rust is not None:
             try:
                 return rust.pull(v)
@@ -116,6 +131,9 @@ def pull_fb(view: str | None = None) -> tuple[dict, str]:
         if v == "war":
             w = _war_get()
             return w.state(), w.px_hex()
+        if v == "aquarium":
+            aquarium = _aquarium_get()
+            return aquarium.state(), aquarium.px_hex()
         t = _tank_get()
         return t.state(), t.px_hex()
 
@@ -126,7 +144,7 @@ def cmd(name: str, data: dict | None = None, view: str | None = None) -> dict:
     try:
         if name == "view":
             set_view(str(data.get("sim") or data.get("view") or v))
-            path = "/war/focus" if _view == "war" else "/tank/focus"
+            path = f"/{_view}/focus" if _view in ("war", "tank", "aquarium") else "/tank/focus"
             try:
                 _http("POST", "/mode", {"name": _view})
             except Exception:
@@ -142,13 +160,14 @@ def cmd(name: str, data: dict | None = None, view: str | None = None) -> dict:
             st["source"] = "live"
             st["sim"] = want
             return st
-        prefix = "/war" if v == "war" else "/tank"
+        prefix = "/war" if v == "war" else "/aquarium" if v == "aquarium" else "/tank"
         st = _http("POST", f"{prefix}/{name}", data)
         st["source"] = "live"
         st["sim"] = v
         return st
     except Exception as e:
-        rust = _rust()
+        # Rust implements tank/war only; aquarium remains a sealed twin.
+        rust = _rust() if v != "aquarium" else None
         if rust is not None:
             try:
                 st = rust.cmd(v, name, data)
@@ -169,6 +188,12 @@ def cmd(name: str, data: dict | None = None, view: str | None = None) -> dict:
             elif name == "east":
                 w.reinforce(1, str(data.get("arty", "0")) not in ("0", "false", ""))
             st = w.state()
+        elif v == "aquarium":
+            aquarium = _aquarium_get()
+            if name == "pan":
+                aquarium.cam_x = max(0.0, min(40.0, aquarium.cam_x + int(data.get("dx") or 0)))
+                aquarium.cam_y = max(0.0, min(9.0, aquarium.cam_y + int(data.get("dy") or 0)))
+            st = aquarium.state()
         else:
             t = _tank_get()
             if name == "feed":
@@ -224,12 +249,12 @@ def board_html() -> str:
     src_cls = "pill-ok" if src == "live" else "pill-warn"
     sim = st.get("sim") or _view
     if sim == "war":
-        note = "Turn-based civ. Program resolves a turn, glass plays it. CAMP → MELEE → GUNS → ARTY."
+        note = "Seeded civ. New civ rolls a new map. Numbers live here — glass is pixels only."
         kpis = f"""
     <div class="kpi"><div class="muted">west</div><strong>{st.get("west", 0)}</strong></div>
     <div class="kpi"><div class="muted">east</div><strong>{st.get("east", 0)}</strong></div>
-    <div class="kpi"><div class="muted">score</div><strong>{st.get("kw", 0)}–{st.get("ke", 0)}</strong></div>
-    <div class="kpi"><div class="muted">age</div><strong>{html_mod.escape(str(st.get("age_name") or "—"))}</strong></div>
+    <div class="kpi"><div class="muted">ages</div><strong>{st.get("agew", 0)}/{st.get("agee", 0)}</strong></div>
+    <div class="kpi"><div class="muted">seed</div><strong>{st.get("seed", 0)}</strong></div>
     <div class="kpi"><div class="muted">turn</div><strong>{st.get("turn", 0)}</strong></div>"""
     elif sim == "tank":
         note = "tadpole=prey · chevron=hunter · ADC=LiPo · no IMU/LDR"
@@ -238,6 +263,12 @@ def board_html() -> str:
     <div class="kpi"><div class="muted">hunters</div><strong>{st.get("pred", 0)}</strong></div>
     <div class="kpi"><div class="muted">gen</div><strong>{st.get("gen", 0)}</strong></div>
     <div class="kpi"><div class="muted">births</div><strong>{st.get("births", 0)}</strong></div>"""
+    elif sim == "aquarium":
+        note = "72×18 sealed aquarium · 32×9 camera · depth drives grayscale and fish size"
+        kpis = f"""
+    <div class="kpi"><div class="muted">fish</div><strong>{st.get("fish", 0)}</strong></div>
+    <div class="kpi"><div class="muted">bubbles</div><strong>{st.get("bubbles", 0)}</strong></div>
+    <div class="kpi"><div class="muted">camera</div><strong>{html_mod.escape(str(st.get("cam", [])))}</strong></div>"""
     else:
         note = "reel mode — title card then the visual. 32×9 is the camera."
         kpis = f"""
@@ -286,6 +317,7 @@ def handle_post(path: str, raw: bytes, headers: dict[str, str]) -> tuple | None:
     data = _parse(raw, headers)
     name = path.rstrip("/").rsplit("/", 1)[-1]
     war_path = "/war/" in path or path.rstrip("/").endswith("/war")
+    aquarium_path = "/aquarium/" in path or path.rstrip("/").endswith("/aquarium")
     if name == "view":
         set_view(str(data.get("sim") or data.get("view") or "tank"))
         cmd("view", {"sim": _view})
@@ -298,6 +330,10 @@ def handle_post(path: str, raw: bytes, headers: dict[str, str]) -> tuple | None:
     if war_path or name in {"next", "wall", "west", "east"}:
         set_view("war")
         cmd(name if name != "war" else "focus", data, "war")
+        return 200, board_html().encode("utf-8"), "text/html; charset=utf-8"
+    if aquarium_path or (name in AQUARIUM_CMDS and _view == "aquarium"):
+        set_view("aquarium")
+        cmd(name if name != "aquarium" else "focus", data, "aquarium")
         return 200, board_html().encode("utf-8"), "text/html; charset=utf-8"
     if name in TANK_CMDS or "/tank/" in path:
         set_view("tank")

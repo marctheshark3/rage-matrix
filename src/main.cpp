@@ -26,6 +26,7 @@
 #include "critters.h"
 #include "war.h"
 #include "card.h"
+#include "aquarium.h"
 
 #define WAVE_W 32
 #define WAVE_H 9
@@ -56,6 +57,7 @@ enum Mode : uint8_t {
   MODE_DISC,
   MODE_TANK,
   MODE_WAR,
+  MODE_AQUARIUM,
   MODE_COUNT
 };
 
@@ -63,10 +65,10 @@ static const char *MODE_NAME[MODE_COUNT] = {
     "wave", "sine", "text", "clock", "bars",
     "spark", "rain", "bounce", "life", "pulse",
     "plasma", "tunnel", "fire", "lissa", "ca",
-    "stars", "xor", "rings", "cycle", "grid", "disc", "tank", "war"};
+    "stars", "xor", "rings", "cycle", "grid", "disc", "tank", "war", "aquarium"};
 
 static const Mode VISUALS[] = {
-    MODE_CYCLE, MODE_GRID, MODE_DISC, MODE_TANK, MODE_WAR, MODE_WAVE, MODE_PLASMA,
+    MODE_CYCLE, MODE_GRID, MODE_DISC, MODE_TANK, MODE_WAR, MODE_AQUARIUM, MODE_WAVE, MODE_PLASMA,
     MODE_TUNNEL, MODE_FIRE, MODE_LISSA, MODE_STARS, MODE_RINGS,
     MODE_SINE, MODE_LIFE, MODE_CA, MODE_XOR, MODE_PULSE,
     MODE_BARS, MODE_RAIN};
@@ -92,7 +94,7 @@ static const char *MODE_TITLE[MODE_COUNT] = {
     "WAVE", "SINE", "TEXT", "CLOCK", "BARS",
     "SPARK", "RAIN", "BOUNCE", "LIFE", "PULSE",
     "PLASMA", "TUNNEL", "FIRE", "LISSA", "CA",
-    "STARS", "XOR", "RINGS", "CYCLE", "GRID", "DISC", "TANK", "WAR ZONE"};
+    "STARS", "XOR", "RINGS", "CYCLE", "GRID", "DISC", "TANK", "WAR ZONE", "AQUARIUM"};
 
 static void startTitle(Mode m);
 static void renderTitle();
@@ -271,7 +273,7 @@ static void startTitle(Mode m) {
     cardClear();
     return;
   }
-  cardShow(MODE_TITLE[m], (m == MODE_WAR || m == MODE_TANK) ? 2200 : 1600);
+  cardShow(MODE_TITLE[m], (m == MODE_WAR || m == MODE_TANK || m == MODE_AQUARIUM) ? 2200 : 1600);
 }
 
 static void renderTitle() {
@@ -737,7 +739,7 @@ static void enterMode(Mode m) {
   mode = m;
   modeStarted = millis();
   frame = 0;
-  reelMs = (m == MODE_TEXT) ? 14000 : ((m == MODE_TANK || m == MODE_WAR) ? 30000 : 8000);
+  reelMs = (m == MODE_TEXT) ? 14000 : ((m == MODE_TANK || m == MODE_WAR || m == MODE_AQUARIUM) ? 30000 : 8000);
   if (m == MODE_WAVE) {
     waveClear();
     dropAt(8, 4, 1.0f);
@@ -769,15 +771,15 @@ static void enterMode(Mode m) {
   } else if (m == MODE_CYCLE) {
     cycleSeed();
   }
-  if (m != MODE_WAR && m != MODE_TANK && !cardLive()) startTitle(m);
+  if (m != MODE_WAR && m != MODE_TANK && m != MODE_AQUARIUM && !cardLive()) startTitle(m);
   Serial.print(F("mode="));
   Serial.println(MODE_NAME[m]);
 }
 
 static void printHelp() {
   Serial.println(F("RAGE INDUSTRIES — variety reel"));
-  Serial.println(F("e=tank  r=war  f=feed  z=shake  a=auto  0-9=lock  n=next  bN"));
-  Serial.println(F("POST /mode name=war|tank|wave|...  GET /mode.json"));
+  Serial.println(F("e=tank  r=war  q=aquarium  f=feed  z=shake  a=auto  n=next  bN"));
+  Serial.println(F("POST /mode name=aquarium|war|tank|wave|...  GET /mode.json"));
   Serial.println(F("0 wave 1 sine 2 text 3 clock 4 bars"));
   Serial.println(F("5 spark 6 rain 7 bounce 8 life 9 pulse"));
   Serial.println(F("this panel is cool-white; k only tags the demo reel"));
@@ -854,6 +856,11 @@ static void handleLine(char *line) {
     case 'R':
       autoReel = false;
       enterMode(MODE_WAR);
+      break;
+    case 'q':
+    case 'Q':
+      autoReel = false;
+      enterMode(MODE_AQUARIUM);
       break;
     case 'f':
     case 'F':
@@ -1002,14 +1009,17 @@ void setup() {
   wifiOtaBegin();
   crittersBegin();
   warBegin();
+  randomSeed(ESP.getChipId() ^ micros());
+  aquariumBegin();
   if (ESP8266WebServer *s = wifiOtaServer()) {
     crittersHttpBegin(*s);
     warHttpBegin(*s);
+    aquariumHttpBegin(*s);
     modesHttpBegin(*s);
   }
   crittersSetFb(fb);
   warSetFb(fb);
-  randomSeed(ESP.getChipId() ^ micros());
+  aquariumSetFb(fb);
   autoReel = false;
   enterMode(MODE_TANK);
 }
@@ -1024,6 +1034,10 @@ void loop() {
   if (warTakeFocus() && mode != MODE_WAR) {
     autoReel = false;
     enterMode(MODE_WAR);
+  }
+  if (aquariumTakeFocus() && mode != MODE_AQUARIUM) {
+    autoReel = false;
+    enterMode(MODE_AQUARIUM);
   }
 
   if (autoReel && (millis() - modeStarted > reelMs)) {
@@ -1081,6 +1095,10 @@ void loop() {
         warStep();
         warRender(fb, brightScale);
         warSetFb(fb);
+      } else if (mode == MODE_AQUARIUM) {
+        aquariumStep();
+        aquariumRender(fb, brightScale);
+        aquariumSetFb(fb);
       } else {
         renderDisc();
       }
